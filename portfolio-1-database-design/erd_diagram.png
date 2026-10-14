@@ -48,4 +48,4 @@ erDiagram
         datetime actual_check_out
         boolean room_key_issued
         string notes
-    }
+    } 

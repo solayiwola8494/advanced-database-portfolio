@@ -1,122 +1,96 @@
 -- =============================================================================
--- Database Schema Script: Grand Vista Hotel Management System
+-- Fully Normalized DDL Schema: Grand Vista Hotel Management System
 -- Portfolio Component: Portfolio 1 - Database Design & Modelling
+-- Normalization Level: 3NF / BCNF Compliant
 -- Target Database: PostgreSQL
--- Description: Creates custom enum types, core tables, primary keys, foreign keys, 
---              and domain constraints for room reservations, payments, and logs.
 -- =============================================================================
 
--- Clean build: Drop existing tables if they exist to allow clean execution
+-- Clean build teardown
 DROP TABLE IF EXISTS check_in_check_out CASCADE;
 DROP TABLE IF EXISTS payments CASCADE;
 DROP TABLE IF EXISTS bookings CASCADE;
 DROP TABLE IF EXISTS rooms CASCADE;
+DROP TABLE IF EXISTS room_types CASCADE;
 DROP TABLE IF EXISTS guests CASCADE;
 
--- Drop existing custom enum data types
 DROP TYPE IF EXISTS room_status_enum CASCADE;
 DROP TYPE IF EXISTS booking_status_enum CASCADE;
 DROP TYPE IF EXISTS payment_status_enum CASCADE;
 
--- =============================================================================
--- 1. ENUMERATED DATA TYPES (Restricted Domain Values)
--- =============================================================================
-
--- Defines operational statuses for physical hotel rooms
+-- Enums for Domain Integrity
 CREATE TYPE room_status_enum AS ENUM ('available', 'occupied', 'maintenance');
-
--- Defines lifecycle states for a guest booking
 CREATE TYPE booking_status_enum AS ENUM ('confirmed', 'checked_in', 'checked_out', 'cancelled');
-
--- Defines financial settlement statuses for transactions
 CREATE TYPE payment_status_enum AS ENUM ('pending', 'completed', 'refunded');
 
--- =============================================================================
--- 2. TABLE DEFINITIONS & CONSTRAINTS
--- =============================================================================
-
--- -----------------------------------------------------------------------------
--- Table: guests
--- Purpose: Stores profile and contact information for registered customers
--- -----------------------------------------------------------------------------
+-- 1. Guests Table
 CREATE TABLE guests (
-    guest_id SERIAL PRIMARY KEY,                    -- Auto-incrementing unique customer ID
-    first_name VARCHAR(50) NOT NULL,               -- Guest given name
-    last_name VARCHAR(50) NOT NULL,                -- Guest family name
-    email VARCHAR(150) NOT NULL UNIQUE,            -- Unique contact/account email address
-    phone_number VARCHAR(20) NOT NULL,             -- Contact phone number
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP -- Record creation timestamp
+    guest_id SERIAL PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    email VARCHAR(150) NOT NULL UNIQUE,
+    phone_number VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- -----------------------------------------------------------------------------
--- Table: rooms
--- Purpose: Stores physical room inventory, room categories, and daily rates
--- -----------------------------------------------------------------------------
+-- 2. Room Types Table (Eliminates Transitive Dependency)
+CREATE TABLE room_types (
+    room_type_id SERIAL PRIMARY KEY,
+    type_name VARCHAR(50) NOT NULL UNIQUE,
+    daily_rate NUMERIC(10, 2) NOT NULL,
+    capacity INT NOT NULL DEFAULT 2,
+    CONSTRAINT chk_positive_rate CHECK (daily_rate > 0),
+    CONSTRAINT chk_positive_capacity CHECK (capacity > 0)
+);
+
+-- 3. Rooms Table (References room_types)
 CREATE TABLE rooms (
-    room_id SERIAL PRIMARY KEY,                    -- Auto-incrementing internal room ID
-    room_number VARCHAR(10) NOT NULL UNIQUE,       -- Public physical room number (e.g., '101A')
-    room_type VARCHAR(50) NOT NULL,                -- Category (e.g., 'Standard', 'Deluxe', 'Suite')
-    daily_rate NUMERIC(10, 2) NOT NULL,            -- Nightly rate in local currency
-    status room_status_enum NOT NULL DEFAULT 'available', -- Real-time room status
-    CONSTRAINT chk_positive_rate CHECK (daily_rate > 0)   -- Ensures pricing is always positive
+    room_id SERIAL PRIMARY KEY,
+    room_number VARCHAR(10) NOT NULL UNIQUE,
+    room_type_id INT NOT NULL,
+    status room_status_enum NOT NULL DEFAULT 'available',
+    CONSTRAINT fk_room_type FOREIGN KEY (room_type_id) 
+        REFERENCES room_types(room_type_id) ON DELETE RESTRICT
 );
 
--- -----------------------------------------------------------------------------
--- Table: bookings
--- Purpose: Records room reservations linking individual guests to specific rooms
--- -----------------------------------------------------------------------------
+-- 4. Bookings Table
 CREATE TABLE bookings (
-    booking_id SERIAL PRIMARY KEY,                  -- Auto-incrementing reservation ID
-    guest_id INT NOT NULL,                         -- Foreign key referencing guests table
-    room_id INT NOT NULL,                          -- Foreign key referencing rooms table
-    check_in_date DATE NOT NULL,                   -- Scheduled arrival date
-    check_out_date DATE NOT NULL,                  -- Scheduled departure date
-    total_amount NUMERIC(10, 2) NOT NULL,          -- Total calculated reservation cost
-    status booking_status_enum NOT NULL DEFAULT 'confirmed', -- Reservation lifecycle state
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, -- Timestamp when booking was made
-    
-    -- Foreign key constraints preventing deletion of referenced entity records
+    booking_id SERIAL PRIMARY KEY,
+    guest_id INT NOT NULL,
+    room_id INT NOT NULL,
+    check_in_date DATE NOT NULL,
+    check_out_date DATE NOT NULL,
+    total_amount NUMERIC(10, 2) NOT NULL,
+    status booking_status_enum NOT NULL DEFAULT 'confirmed',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_booking_guest FOREIGN KEY (guest_id) 
         REFERENCES guests(guest_id) ON DELETE RESTRICT,
     CONSTRAINT fk_booking_room FOREIGN KEY (room_id) 
         REFERENCES rooms(room_id) ON DELETE RESTRICT,
-        
-    -- Check constraints validating logical dates and positive payment values
     CONSTRAINT chk_dates CHECK (check_out_date > check_in_date),
     CONSTRAINT chk_positive_total CHECK (total_amount >= 0)
 );
 
--- -----------------------------------------------------------------------------
--- Table: payments
--- Purpose: Tracks monetary transactions associated with guest reservations
--- -----------------------------------------------------------------------------
+-- 5. Payments Table
 CREATE TABLE payments (
-    payment_id SERIAL PRIMARY KEY,                  -- Auto-incrementing payment ID
-    booking_id INT NOT NULL,                       -- Foreign key referencing bookings table
-    amount NUMERIC(10, 2) NOT NULL,                -- Monetary value paid
-    payment_method VARCHAR(50) NOT NULL,           -- Payment channel (e.g., 'Credit Card', 'Cash')
-    payment_status payment_status_enum NOT NULL DEFAULT 'pending', -- Transaction state
-    payment_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- Transaction execution time
-    
-    -- Cascades deletion if parent booking record is removed
+    payment_id SERIAL PRIMARY KEY,
+    booking_id INT NOT NULL,
+    amount NUMERIC(10, 2) NOT NULL,
+    payment_method VARCHAR(50) NOT NULL,
+    payment_status payment_status_enum NOT NULL DEFAULT 'pending',
+    payment_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_payment_booking FOREIGN KEY (booking_id) 
         REFERENCES bookings(booking_id) ON DELETE CASCADE,
-    CONSTRAINT chk_positive_payment CHECK (amount > 0) -- Validates payment value is positive
+    CONSTRAINT chk_positive_payment CHECK (amount > 0)
 );
 
--- -----------------------------------------------------------------------------
--- Table: check_in_check_out
--- Purpose: Logs physical stay arrival and departure events for audit purposes
--- -----------------------------------------------------------------------------
+-- 6. Check-In / Check-Out Log Table
 CREATE TABLE check_in_check_out (
-    record_id SERIAL PRIMARY KEY,                  -- Auto-incrementing audit log record ID
-    booking_id INT NOT NULL UNIQUE,                -- Foreign key (1-to-1 relationship with bookings)
-    actual_check_in TIMESTAMP NOT NULL,            -- Precise physical check-in timestamp
-    actual_check_out TIMESTAMP,                    -- Precise physical check-out timestamp (nullable until departure)
-    room_key_issued BOOLEAN NOT NULL DEFAULT TRUE, -- Key card issuance flag
-    notes TEXT,                                    -- Optional receptionist notes or comments
-    
-    -- Cascades deletion if parent booking record is removed
+    record_id SERIAL PRIMARY KEY,
+    booking_id INT NOT NULL UNIQUE,
+    actual_check_in TIMESTAMP NOT NULL,
+    actual_check_out TIMESTAMP,
+    room_key_issued BOOLEAN NOT NULL DEFAULT TRUE,
+    notes TEXT,
     CONSTRAINT fk_log_booking FOREIGN KEY (booking_id) 
         REFERENCES bookings(booking_id) ON DELETE CASCADE
 );
